@@ -1,7 +1,6 @@
 import requests
 import json
-import sqlite3
-
+import classes_ORM
 #функция получения словаря id - name города
 def id_name(city):
     goroda = requests.get('https://api.hh.ru/areas/').json()
@@ -70,7 +69,8 @@ def requirements(res_all):
     return requirement
 
 def requirement_count(requirement, keywords):
-    word = keywords.split(',')
+    word = keywords.replace(' ', '')
+    word = word.split(',')
     total = 0
     dict_word = {}
     for i in word:
@@ -111,33 +111,27 @@ def merged_dict(vacancy, city, keywords, requirement_count, vacancy_count, salar
 def save_file(new_dict):
     with open("api_hh.json", "w", encoding='utf-8') as write_file:
         json.dump(new_dict, write_file)
-
+        
+#TODO: сделать через ORM
 #функция внесения нужной информации в базу данных
 def data_to_the_database():
-    # Подключение к базе данных
-    conn = sqlite3.connect('hh_api_data.db')   
-    # Создаем курсор
-    cursor = conn.cursor()
     #присваиваем переменным значаения вакансий,городов,скиллов
-    cursor.execute('SELECT * from vacancy')
-    vacancy = cursor.fetchall()
-    cursor.execute('SELECT * from city')
-    city = cursor.fetchall()
-    cursor.execute('SELECT * from skills')
-    skills = cursor.fetchall()
-    #формируем списки городов и вакансий
-    city_all = []
-    vacancy_all = []
-    skills_all = []
-    for i in city:
-        city_all.append(i[1])
-    for i in vacancy:
-        vacancy_all.append(i[1])
-    for i in skills:
-        skills_all.append(i[1])
-    city_all = set(city_all)
-    vacancy_all = set(vacancy_all)
-    skills_all = set(skills_all)
+    vacancy_query = classes_ORM.session.query(classes_ORM.Vacancy).all()
+    city_query = classes_ORM.session.query(classes_ORM.City).all()
+    skills_query = classes_ORM.session.query(classes_ORM.Skills).all()
+     #формируем списки городов и вакансий
+    vacancy = []
+    city = []
+    skills = []
+    for i in vacancy_query:
+        vacancy.append(i.name)
+    for i in city_query:
+        city.append(i.name)
+    for i in skills_query:
+        skills.append(i.name)
+    city = set(city)
+    vacancy = set(vacancy)
+    skills = set(skills)
     #открываем json файл с данными парсинга
     with open('api_hh.json', 'r', encoding='utf-8') as f: #открыли файл с данными
         text = json.load(f) #загнали все, что получилось в переменную
@@ -154,51 +148,67 @@ def data_to_the_database():
         skill_count.append(text['requirement_count'][i]['count'])
         skill_percent.append(text['requirement_count'][i]['percent'])
 
-    #Сначала вносим данные в таблицы с вакансиями и городами. Если такие уже есть, данные не вносятся.
-    if vacancy_add not in vacancy_all:
-        cursor.execute("insert into vacancy(name) VALUES (?)", (vacancy_add,))
+    #Сначала вносим данные в таблицы с вакансиями, городами и скиллами. Если такие уже есть, данные не вносятся.
+    if vacancy_add not in vacancy:
+        res = classes_ORM.Vacancy(vacancy_add)
+        classes_ORM.session.add(res)
     else:
         print(f'вакансия {vacancy_add} уже есть')
 
-    if city_add not in city_all:
-        cursor.execute("insert into city(name) VALUES (?)", (city_add,))
+    if city_add not in city:
+        res = classes_ORM.City(city_add)
+        classes_ORM.session.add(res)
     else:
         print(f'город {city_add} уже есть')
 
     for i in range(len(skill_name)):
-        if skill_name[i] not in skills_all:
-            cursor.execute("insert into skills(name) VALUES (?)", (skill_name[i],))
+        if skill_name[i] not in skills:
+            res = classes_ORM.Skills(skill_name[i])
+            classes_ORM.session.add(res)
         else:
             print(f'скилл {skill_name[i]} уже есть')
 
     #коммитим данные
-    conn.commit()
-    # Создаем курсор
-    cursor = conn.cursor()
+    classes_ORM.session.commit()
+
+    # Создаем session
+    data = classes_ORM.session.query(classes_ORM.Data).all()
     #Вытыскмваем id добавленных или уже существующих значений города и вакансии, полученных с очередного парсинга
-    cursor.execute("SELECT ID FROM vacancy WHERE name LIKE (?)", (vacancy_add,))
-    id_vacancy = cursor.fetchall()
-    cursor.execute("SELECT ID FROM city WHERE name LIKE (?)", (city_add,))
-    id_city = cursor.fetchall()
+    id_v = classes_ORM.session.query(classes_ORM.Vacancy).filter(classes_ORM.Vacancy.name == vacancy_add).all()
+    id_vacancy = []
+    for i in id_v:
+        id_vacancy.append(i.id)
+    id_c = classes_ORM.session.query(classes_ORM.City).filter(classes_ORM.City.name == city_add).all()
+    id_city = []
+    for i in id_c:
+        id_city.append(i.id)
     #Заливаем все данные в общую базу данных data
     for i in range(len(skill_name)):
-        cursor.execute("SELECT ID FROM skills WHERE name LIKE (?)", (skill_name[i],))
-        id_skill = cursor.fetchall()
-        cursor.execute("INSERT into data(vacancy,city,vacancy_count,salary_mean,skill_name, skill_count, skill_percent) values(?,?,?,?,?,?,?)", (id_vacancy[0][0], id_city[0][0], vacancy_count, salary_mean, id_skill[0][0], skill_count[i], skill_percent[i]))
-    #Сораняем и закрываем изменения в базе данных
-    conn.commit()
-    conn.close()
+        id_s = classes_ORM.session.query(classes_ORM.Skills).filter(classes_ORM.Skills.name == skill_name[i]).all()
+        id_skill = []
+        for i in id_s:
+            id_skill.append(i.id)
+        res_data = classes_ORM.Data(id_vacancy[0], id_city[0], vacancy_count, salary_mean, id_skill[0], skill_count[0], skill_percent[0])
+        classes_ORM.session.add(res_data)
+    classes_ORM.session.commit()
 
 def look_at_my_data(vacancy, city):
-    # Подключение к базе данных
-    conn = sqlite3.connect('hh_api_data.db')
-    # Создаем курсор
-    cursor = conn.cursor()
-    #Задаем параметры для вывода
-    cursor.execute("SELECT d.id, v.name, c.name, d.salary_mean, d.vacancy_count, s.name, d.skill_count, d.skill_percent  from data d, vacancy v, city c, skills s where d.vacancy = v.id and d.city = c.id and d.skill_name = s.id")
-    data = cursor.fetchall()
+    #Вытыскмваем id добавленных или уже существующих значений города и вакансии, полученных с очередного парсинга
+    id_v = classes_ORM.session.query(classes_ORM.Vacancy).filter(classes_ORM.Vacancy.name == vacancy).all()
+    id_vacancy = []
+    for i in id_v:
+        id_vacancy.append(i.id)
+    id_c = classes_ORM.session.query(classes_ORM.City).filter(classes_ORM.City.name == city).all()
+    id_city = []
+    for i in id_c:
+        id_city.append(i.id)
+    # Поиск по параметрам
+    res_param = classes_ORM.session.query(classes_ORM.Data).filter(classes_ORM.Data.vacancy == id_vacancy[0]).filter(classes_ORM.Data.city == id_city[0]).all()
     res = []
-    for i in range(len(data)):
-        if vacancy in data[i] and city in data[i]:
-            res.append(data[i])
+    for i in res_param:
+        res.append(f'Вакансия: {vacancy}')
+        res.append(f'Город: {city}')
+        res.append(f'Средняя Зарплата: {i.salary_mean}')
+        res.append(f'Количество вакансий: {i.vacancy_count}')
+        break
     return res
